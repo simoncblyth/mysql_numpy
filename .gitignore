@@ -1,0 +1,6 @@
+*.pyc
+build
+MySQLdb/MySQLdb/release.py
+MySQLdb/MySQL_python.egg-info
+MySQLdb/dist
+

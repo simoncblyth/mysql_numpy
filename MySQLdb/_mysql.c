@@ -1661,7 +1661,7 @@ _mysql_ResultObject_fetch_nparray(
 	PyObject* array = NULL;
 
 	MYSQL_ROW row;
-        int dims[] = { -1 };
+        npy_intp dims[] = { -1 };
 	
  	check_result_connection(self);
     
@@ -1755,9 +1755,11 @@ _mysql_ResultObject_fetch_nparrayfast(
  	PyObject *unused)
  {
 	unsigned int n, i  ;
-        unsigned long *lengths ;
+        //unsigned long *lengths ;
+        int rc ;
         my_ulonglong e ;
 	MYSQL_ROW row;
+        PyObject* array = NULL  ; 
 
         //printf("_fetch_nparrayfast\n");
 	
@@ -1804,7 +1806,7 @@ _mysql_ResultObject_fetch_nparrayfast(
 	    //lengths = mysql_fetch_lengths(self->result);  
 
             for( i = 0 ; i < n ; i++ ){
-                 int rc = sscanf( row[i],  fmts[i], rec + offsets[i]  ) ;
+                 rc = sscanf( row[i],  fmts[i], rec + offsets[i]  ) ;
                  //if(rc!=1 || i < 10) printf( " i %d offset %d fmt %s type %d rc %d \n", i, offsets[i], fmts[i], types[i], rc  );
             }
             rec += descr->elsize ;
@@ -1813,23 +1815,23 @@ _mysql_ResultObject_fetch_nparrayfast(
 
         // interpret the buffer and a numpy array 
         PyObject* buf = PyBuffer_FromMemory( data , (Py_ssize_t)size ) ;
-        PyObject* a   = PyArray_FromBuffer( buf, descr , (npy_intp)nele, (npy_intp)0 );
+        array   = PyArray_FromBuffer( buf, descr , (npy_intp)nele, (npy_intp)0 );
 
         //PyObject_Print( (PyObject*)buf , stdout, 0);
         //printf("\n");
-        //printf(" a %x \n", (npy_intp)a );
-        //PyObject_Print( (PyObject*)a , stdout, 0);
+        //printf(" array %x \n", (npy_intp)array );
+        //PyObject_Print( (PyObject*)array , stdout, 0);
         //printf("\n");
 
-        return a ;
+        return array ;
 	    
   error:
-        printf(" erroror...  \n" );
+        printf(" error...  \n" );
         if (mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
 	      _mysql_Exception((_mysql_ConnectionObject *)self->conn);
         } 
 
-	Py_XDECREF(a);
+	Py_XDECREF(array);
 	return NULL;
 }
 
