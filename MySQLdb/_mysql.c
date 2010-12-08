@@ -39,6 +39,60 @@ PERFORMANCE OF THIS SOFTWARE.
 #include "mysqld_error.h"
 #include "errmsg.h"
 
+#include <numpy/arrayobject.h>
+
+#include "mysql_numpy.h"
+
+
+int dtype_extract( PyArray_Descr* dtype , int offsets[DTYPE_FIELD_MAX]  , char fmts[DTYPE_FIELD_MAX][DTYPE_FMTLEN_MAX], int types[DTYPE_FIELD_MAX], int* noffsets )
+{
+    // WARNING ... DEVELOPED in ENV-HOME/npy/numpy/dtype.c
+
+     PyObject *key, *tup ;
+     PyObject* names = dtype->names ;
+     PyObject* fields = dtype->fields ;
+     int n = -1 ;
+     if(PyTuple_Check(names) && PyDict_Check(fields)){
+         n = PyTuple_GET_SIZE(names);
+         int i ; 
+         for ( i = 0; i < n; i++) {
+              key = PyTuple_GET_ITEM(names, i);
+              tup = PyDict_GetItem( fields, key);
+             if(PyTuple_Check(tup)){
+                   Py_ssize_t stup = PyTuple_GET_SIZE(tup);
+                   if( (int)stup >= 2 ){
+                       PyObject* ft  = PyTuple_GetItem( tup , (Py_ssize_t)0 );
+                       PyObject* fo  = PyTuple_GetItem( tup , (Py_ssize_t)1 );
+                       PyArray_Descr* fdt = (PyArray_Descr*)ft ;
+
+                       int type_num = fdt->type_num ;
+                       char* fmt = NPY_TYPE_FMTS[type_num] ;  
+                       int offset   =  (int)PyLong_AsLong( fo ); 
+                       
+                       char fmt_[10] ;
+                       if( type_num == NPY_STRING ){
+                           sprintf( fmt_ , "%c%d%c" , *"%", fdt->elsize , *"s" );
+                           printf( "fmt_ %s \n" , fmt_ );
+                           strcpy( fmts[i] , fmt_ );
+                       } else {
+                           strcpy( fmts[i] , fmt );
+                       }
+
+                       offsets[i] = offset ;
+                       types[i] = type_num ;
+                   }
+             }
+         } 
+     } 
+     *noffsets = n ;
+     return 0 ;
+}
+
+
+
+
+
+
 #if PY_VERSION_HEX < 0x02020000
 # define MyTuple_Resize(t,n,d) _PyTuple_Resize(t, n, d)
 # define MyMember(a,b,c,d,e) {a,b,c,d}
@@ -388,6 +442,7 @@ _mysql_ResultObject_Initialize(
 	}
 	n = mysql_num_fields(result);
 	self->nfields = n;
+
 	if (!(self->converter = PyTuple_New(n))) return -1;
 	fields = mysql_fetch_fields(result);
 	for (i=0; i<n; i++) {
@@ -1191,6 +1246,74 @@ _mysql_ResultObject_describe(
 	Py_XDECREF(d);
 	return NULL;
 }
+
+
+
+
+static char _mysql_ResultObject_npdescr__doc__[] =
+"Returns the sequence of 7-tuples required by the DB-API for\n\
+the Cursor.description attribute.\n\
+";
+
+static PyObject *
+_mysql_ResultObject_npdescr(
+	_mysql_ResultObject *self,
+	PyObject *args)
+{
+	PyObject* descr;
+	MYSQL_FIELD *fields;
+
+        int tn ;	
+        unsigned int i, n;
+        long type, length ;
+        char npy_code[10];
+        char* name ;
+
+	check_result_connection(self);
+	n = mysql_num_fields(self->result);
+	fields = mysql_fetch_fields(self->result);
+	
+        if (!(descr = PyList_New(n))) return NULL;
+	for (i=0; i<n; i++) {
+                name   = fields[i].name ;
+                type   =  (long) fields[i].type ;
+                length =  (long) fields[i].length ;
+
+                // hmm DBI specifics need to be factored elsewhere 
+                if(strcmp(name,"TIMESTART_")==0){
+                     tn = NPY_DATETIME ; 
+                } else if( strcmp(name,"TIMEEND_") == 0){
+                     tn = NPY_DATETIME ; 
+                } else if( strcmp(name,"VERSIONDATE_") == 0){
+                     tn = NPY_DATETIME ; 
+                } else if( strcmp(name,"INSERTDATE_" ) == 0){
+                     tn = NPY_DATETIME ; 
+                } else {          
+                     tn =  mysql2npy( type ) ;
+                }
+                int is_flexible =  PyTypeNum_ISFLEXIBLE(tn);
+                PyArray_Descr* field_dt = is_flexible  ? PyArray_DescrNewFromType(tn) : PyArray_DescrFromType(tn);
+                if( is_flexible ) field_dt->elsize = length ;
+                
+                if( tn == NPY_DATETIME ){
+                    sprintf( npy_code, "%c%d[s]", field_dt->type , field_dt->elsize );
+                } else {
+                    sprintf( npy_code, "%c%d", field_dt->type , field_dt->elsize );
+                }
+
+    	        PyObject* it = Py_BuildValue("(s,s)", name, npy_code );
+
+		if (!it) goto error;
+		PyList_SET_ITEM(descr, i, it );
+	}
+	return descr ;
+  error:
+	Py_XDECREF(descr);
+	return NULL;
+}
+
+
+
 	
 static char _mysql_ResultObject_field_flags__doc__[] =
 "Returns a tuple of field flags, one for each column in the result.\n\
@@ -1454,6 +1577,289 @@ _mysql_ResultObject_fetch_row(
   error:
 	Py_XDECREF(r);
 	return NULL;
+}
+
+
+static char _mysql_ResultObject_futurefetch_row__doc__[] =
+"futurefetchrow()\n\
+  Fetches one row as a tuple of strings.\n\
+  NULL is returned as None.\n\
+  A single None indicates the end of the result set.\n\
+";
+
+static PyObject *
+_mysql_ResultObject_futurefetch_row(
+	_mysql_ResultObject *self,
+ 	PyObject *unused)
+ {
+	unsigned int n, i;
+	unsigned long *length;
+	PyObject *r=NULL;
+	MYSQL_ROW row;
+	
+ 	check_result_connection(self);
+ 	
+	if (!self->use)
+		row = mysql_fetch_row(self->result);
+	else {
+ 		Py_BEGIN_ALLOW_THREADS;
+		row = mysql_fetch_row(self->result);
+ 		Py_END_ALLOW_THREADS;
+	}
+	if (!row && mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
+		_mysql_Exception((_mysql_ConnectionObject *)self->conn);
+		goto error;
+	}
+	if (!row) {
+		Py_INCREF(Py_None);
+		return Py_None;
+	}
+	
+	//n = mysql_num_fields(self->result);
+        n = self->nfields ; 
+	if (!(r = PyTuple_New(n))) return NULL;
+	length = mysql_fetch_lengths(self->result);
+	for (i=0; i<n; i++) {
+		PyObject *v;
+		if (row[i]) {
+			v = PyString_FromStringAndSize(row[i], length[i]);
+			if (!v) goto error;
+		} else /* NULL */ {
+			v = Py_None;
+			Py_INCREF(v);
+ 		}
+		PyTuple_SET_ITEM(r, i, v);
+ 	}
+	return r;
+  error:
+	Py_XDECREF(r);
+	return NULL;
+}
+
+
+static char _mysql_ResultObject_fetch_nparray__doc__[] =
+"fetch_nparrayfast()\n\
+\n\
+  Fetches all rows from the result into a numpy array.\n\
+ \n\
+ See also fetch_nparrayfast() which is quicker by imposes some complications on the \n\
+ way to structure query SQL for proper transmission of datetime columns \n\
+";
+
+
+
+static PyObject *
+_mysql_ResultObject_fetch_nparray(
+	_mysql_ResultObject *self,
+ 	PyObject *unused)
+ {
+	unsigned int n, i ;
+	unsigned long *length ;
+        my_ulonglong e ;
+
+	PyObject* r = NULL;
+	PyObject* array = NULL;
+
+	MYSQL_ROW row;
+        int dims[] = { -1 };
+	
+ 	check_result_connection(self);
+    
+
+        // descr describes the structure of each element, not the shape
+        PyObject* d = _mysql_ResultObject_npdescr( self , NULL ) ;
+        PyArray_Descr *descr;
+        PyArray_DescrConverter( d , &descr);
+        Py_DECREF( d );
+        //PyObject_Print( d , stdout, 0);
+        //PyObject_Print( descr , stdout, 0);
+
+        //_mysql_ConnectionObject* conn = result_connection(self) ;
+        //unsigned long long nele = mysql_affected_rows(&(conn->connection)) ;
+        
+        my_ulonglong nele = mysql_num_rows(self->result);
+
+        // hmm need to know the count in order to create the structured array          
+        dims[0] = nele ; 
+        array = PyArray_SimpleNewFromDescr( 1, dims, descr);
+        
+        n = self->nfields ; 
+
+        for( e=0; e<nele ; e++ ){  
+
+  	    row = mysql_fetch_row(self->result);
+	    if (!row && mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
+	   	    _mysql_Exception((_mysql_ConnectionObject *)self->conn);
+		    goto error;
+	    }
+	    if (!row) {
+	   	    Py_INCREF(Py_None);
+		    return Py_None;
+	    }
+	
+	    length = mysql_fetch_lengths(self->result);
+	    
+            if (!( r = PyTuple_New(n) )) return NULL;
+	    for (i=0; i<n; i++) {
+	  	PyObject *v;
+		if (row[i]) {
+			v = PyString_FromStringAndSize(row[i], length[i]);
+			if (!v) goto error;
+		} else {
+			v = Py_None;
+			Py_INCREF(v);
+ 		}
+		PyTuple_SET_ITEM(r, i, v);
+ 	    }
+            
+            void* ptr = PyArray_GETPTR1(array, (npy_intp)e ) ;
+            PyArray_SETITEM(array, ptr, r );
+        }
+	return array ;
+  error:
+	Py_XDECREF(array);
+	return NULL;
+}
+
+
+
+
+
+
+
+static char _mysql_ResultObject_fetch_nparrayfast__doc__[] =
+"fetch_nparrayfast()\n\
+\n\
+  Fetches all rows from the result into a numpy array.\n\
+  As an optimisation a buffer is created which is then interpreted as a numpy array.\n\
+  Due to this datetime columns need to be converted to seconds since the epoch.\n\
+  For example with SQL : \n\
+\n\
+     select SEQNO, UNIX_TIMESTAMP(TIMESTART) as TIMESTART_ from CalibPmtSpecVld limit 10 \n\
+\n\
+  mysql will return the integer number of seconds since the epoch for the TIMESTART_ column \n\
+  which due to the column name matching the special cased list of :\n\
+      TIMESTART_ \n\
+      TIMEEND_ \n\
+      INSERTDATE_ \n\
+      VERSIONDATE_ \n\
+  will be interpreted as a datetime number \n\
+ \n\
+ See also fetch_nparray() which does not have any optimization complications \n\
+";
+
+
+static PyObject *
+_mysql_ResultObject_fetch_nparrayfast(
+	_mysql_ResultObject *self,
+ 	PyObject *unused)
+ {
+	unsigned int n, i  ;
+        unsigned long *lengths ;
+        my_ulonglong e ;
+	MYSQL_ROW row;
+
+        //printf("_fetch_nparrayfast\n");
+	
+ 	check_result_connection(self);
+
+        // descr describes the structure of each element, not the shape
+        PyObject* d = _mysql_ResultObject_npdescr( self , NULL ) ;
+        PyArray_Descr *descr;
+        PyArray_DescrConverter( d , &descr);
+        Py_DECREF( d );
+
+        int types[DTYPE_FIELD_MAX] ;
+        int offsets[DTYPE_FIELD_MAX] ;
+        char fmts[DTYPE_FIELD_MAX][DTYPE_FMTLEN_MAX] ;
+        int numf ;
+
+        dtype_extract( descr, offsets, fmts, types, &numf );
+        
+        //printf("_fetch_nparrayfast descr \n");
+        //PyObject_Print( (PyObject*)descr , stdout , 0 );
+        //printf("_fetch_nparrayfast descr \n");
+
+        n = self->nfields ; 
+        if( numf != n ){
+             printf("_fetch_nparrayfast fields MISMATCH %d  %d \n", n, numf );
+             goto error ;
+        }
+
+        my_ulonglong nele = mysql_num_rows(self->result);
+        
+        //printf("_fetch_nparrayfast fields %d \n", n  );
+
+       // dynamic "struct" creation 
+        size_t size = descr->elsize*nele ;
+        void* data = malloc(size);
+        void* rec = data ;
+ 
+        for( e=0; e<nele ; e++ ){  
+
+  	    row = mysql_fetch_row(self->result);
+	    if (!row) goto error;
+
+            // hmm not using lengths ... are the row[j] always NULL terminated ?
+	    //lengths = mysql_fetch_lengths(self->result);  
+
+            for( i = 0 ; i < n ; i++ ){
+                 int rc = sscanf( row[i],  fmts[i], rec + offsets[i]  ) ;
+                 //if(rc!=1 || i < 10) printf( " i %d offset %d fmt %s type %d rc %d \n", i, offsets[i], fmts[i], types[i], rc  );
+            }
+            rec += descr->elsize ;
+        }
+
+
+        // interpret the buffer and a numpy array 
+        PyObject* buf = PyBuffer_FromMemory( data , (Py_ssize_t)size ) ;
+        PyObject* a   = PyArray_FromBuffer( buf, descr , (npy_intp)nele, (npy_intp)0 );
+
+        //PyObject_Print( (PyObject*)buf , stdout, 0);
+        //printf("\n");
+        //printf(" a %x \n", (npy_intp)a );
+        //PyObject_Print( (PyObject*)a , stdout, 0);
+        //printf("\n");
+
+        return a ;
+	    
+  error:
+        printf(" erroror...  \n" );
+        if (mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
+	      _mysql_Exception((_mysql_ConnectionObject *)self->conn);
+        } 
+
+	Py_XDECREF(a);
+	return NULL;
+}
+
+
+
+
+static PyObject *
+_mysql_ResultObject__iter__(
+	_mysql_ResultObject *self,
+	PyObject *unused)
+{
+	check_result_connection(self);
+	Py_INCREF(self);
+	return (PyObject *)self;
+}
+
+static PyObject *
+_mysql_ResultObject_next(
+	_mysql_ResultObject *self,
+	PyObject *unused)
+{
+	PyObject *row;
+	check_result_connection(self);
+	row = _mysql_ResultObject_futurefetch_row(self, NULL);
+	if (row == Py_None) {
+		Py_DECREF(row);
+		PyErr_SetString(PyExc_StopIteration, "");
+		return NULL;
+	}
+	return row;
 }
 
 #if MYSQL_VERSION_ID >= 32303
@@ -2392,10 +2798,34 @@ static PyMethodDef _mysql_ResultObject_methods[] = {
 		_mysql_ResultObject_describe__doc__
 	},
 	{
+		"npdescr",
+		(PyCFunction)_mysql_ResultObject_npdescr,
+		METH_VARARGS,
+		_mysql_ResultObject_npdescr__doc__
+	},
+	{
 		"fetch_row",
 		(PyCFunction)_mysql_ResultObject_fetch_row,
 		METH_VARARGS | METH_KEYWORDS,
 		_mysql_ResultObject_fetch_row__doc__
+	},
+	{
+		"fetch_nparray",
+		(PyCFunction)_mysql_ResultObject_fetch_nparray,
+		METH_VARARGS | METH_KEYWORDS,
+		_mysql_ResultObject_fetch_nparray__doc__
+	},
+	{
+		"fetch_nparrayfast",
+		(PyCFunction)_mysql_ResultObject_fetch_nparrayfast,
+		METH_VARARGS | METH_KEYWORDS,
+		_mysql_ResultObject_fetch_nparrayfast__doc__
+	},
+	{
+		"futurefetch_row",
+		(PyCFunction)_mysql_ResultObject_futurefetch_row,
+		METH_VARARGS | METH_KEYWORDS,
+		_mysql_ResultObject_futurefetch_row__doc__
 	},
 	{
 		"field_flags",
@@ -2678,9 +3108,9 @@ PyTypeObject _mysql_ResultObject_Type = {
 #if PY_VERSION_HEX >= 0x02020000
 	/* Added in release 2.2 */
 	/* Iterators */
-	0, /* (getiterfunc) tp_iter */
-	0, /* (iternextfunc) tp_iternext */
-	
+	(getiterfunc) _mysql_ResultObject__iter__, /* (getiterfunc) tp_iter */
+	(iternextfunc) _mysql_ResultObject_next, /* (iternextfunc) tp_iternext */
+		
 	/* Attribute descriptor and subclassing stuff */
 	(struct PyMethodDef *) _mysql_ResultObject_methods, /* tp_methods */
 	(MyMemberlist(*)) _mysql_ResultObject_memberlist, /*tp_members */
@@ -2880,6 +3310,9 @@ init_mysql(void)
 	if (!(_mysql_NULL = PyString_FromString("NULL")))
 		goto error;
 	if (PyDict_SetItemString(dict, "NULL", _mysql_NULL)) goto error;
+
+        import_array();
+
   error:
 	if (PyErr_Occurred())
 		PyErr_SetString(PyExc_ImportError,

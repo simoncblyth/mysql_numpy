@@ -1,5 +1,5 @@
 
-Github repo to for easier management of a patch to mysql-python 1.2.3 
+Github repo for easier management of a patch to mysql-python 1.2.3 
 that adds numpy array pulling capabilities  
 
 mysql-python exported from SVN (rev 650) with :

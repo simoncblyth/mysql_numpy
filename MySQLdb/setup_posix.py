@@ -3,6 +3,12 @@ from ConfigParser import SafeConfigParser
 # This dequote() business is required for some older versions
 # of mysql_config
 
+try:
+    import numpy as np
+except ImportError:
+    np = None 
+
+
 def dequote(s):
     if s[0] in "\"'" and s[0] == s[-1]:
         s = s[1:-1]
@@ -69,6 +75,10 @@ def get_config():
         include_dirs = [ dequote(i[2:])
                          for i in mysql_config('cflags')
                          if i.startswith(compiler_flag('I')) ]
+
+
+    if np:
+         include_dirs += [ np.get_include() ]
 
     if static:
         extra_objects.append(os.path.join(
