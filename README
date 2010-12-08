@@ -1,0 +1,11 @@
+
+Github repo to for easier management of a patch to mysql-python 1.2.3 
+that adds numpy array pulling capabilities  
+
+mysql-python exported from SVN (rev 650) with :
+    svn export https://mysql-python.svn.sourceforge.net/svnroot/mysql-python/tags/MySQLdb-1.2.3/  mysql_numpy
+
+
+
+
+
