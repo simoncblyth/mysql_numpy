@@ -2,5 +2,6 @@
 build
 MySQLdb/MySQLdb/release.py
 MySQLdb/MySQL_python.egg-info
+MySQLdb/_mysql.so
 MySQLdb/dist
 

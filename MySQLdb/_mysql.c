@@ -1258,15 +1258,30 @@ the Cursor.description attribute.\n\
 static PyObject *
 _mysql_ResultObject_npdescr(
 	_mysql_ResultObject *self,
-	PyObject *args)
+	PyObject *args,
+	PyObject *kwargs)
 {
+	static char *kwlist[] = {"verbose", "coerce", NULL};
+
+        unsigned int verbose = 0 ; 
+        PyObject* coerce = NULL ;
+
+        if( kwargs ){
+	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iO:npdescr", kwlist, &verbose, &coerce )){
+                printf("failed to parse \n");
+		return NULL;
+            }
+        } else {
+            printf("no kwargs using defaults \n");
+        }
+
 	PyObject* descr;
 	MYSQL_FIELD *fields;
 
         int tn ;	
         unsigned int i, n;
         long type, length ;
-        char npy_code[10];
+        char npy_code[30];
         char* name ;
 
 	check_result_connection(self);
@@ -1278,34 +1293,45 @@ _mysql_ResultObject_npdescr(
                 name   = fields[i].name ;
                 type   =  (long) fields[i].type ;
                 length =  (long) fields[i].length ;
+                PyObject* pname = PyString_FromString( name );
 
-                // hmm DBI specifics need to be factored elsewhere 
-                if(strcmp(name,"TIMESTART_")==0){
-                     tn = NPY_DATETIME ; 
-                } else if( strcmp(name,"TIMEEND_") == 0){
-                     tn = NPY_DATETIME ; 
-                } else if( strcmp(name,"VERSIONDATE_") == 0){
-                     tn = NPY_DATETIME ; 
-                } else if( strcmp(name,"INSERTDATE_" ) == 0){
-                     tn = NPY_DATETIME ; 
-                } else {          
+                if( coerce != NULL && PyDict_Check( coerce ) && PyDict_Contains( coerce, pname ) ){
+                     // user supplied numpy type coercion based on field names
+                     PyObject* coco = PyDict_GetItem( coerce , pname ); 
+                     printf("coerce fields named %s with numpy dtype code ... ", name );
+                     PyObject_Print( coco , stdout , 0 ); 
+                     printf("\n");
+                     if(PyString_Check( coco )){  
+                         char* scoco = PyString_AsString( coco );   
+                         sprintf( npy_code, "%s", scoco );
+                     } else {
+                         printf("invalid coerce string  \n");
+                         goto error ;
+                     }
+                } else {      
+                     // auto typing from translation of mysql type code to numpy 
                      tn =  mysql2npy( type ) ;
+                     int is_flexible =  PyTypeNum_ISFLEXIBLE(tn);
+                     PyArray_Descr* field_dt = is_flexible  ? PyArray_DescrNewFromType(tn) : PyArray_DescrFromType(tn);
+                     if( is_flexible ) field_dt->elsize = length ;
+                     if( tn == NPY_DATETIME ){
+                         sprintf( npy_code, "%c%d[s]", field_dt->type , field_dt->elsize );
+                     } else {
+                         sprintf( npy_code, "%c%d", field_dt->type , field_dt->elsize );
+                     }
                 }
-                int is_flexible =  PyTypeNum_ISFLEXIBLE(tn);
-                PyArray_Descr* field_dt = is_flexible  ? PyArray_DescrNewFromType(tn) : PyArray_DescrFromType(tn);
-                if( is_flexible ) field_dt->elsize = length ;
-                
-                if( tn == NPY_DATETIME ){
-                    sprintf( npy_code, "%c%d[s]", field_dt->type , field_dt->elsize );
-                } else {
-                    sprintf( npy_code, "%c%d", field_dt->type , field_dt->elsize );
-                }
-
     	        PyObject* it = Py_BuildValue("(s,s)", name, npy_code );
-
-		if (!it) goto error;
+		if (!it){
+                     printf("invalid descr item for field %s \n", name );
+                     goto error;
+                }
 		PyList_SET_ITEM(descr, i, it );
 	}
+
+        printf("descr ... \n");
+        PyObject_Print( descr , stdout , 0);
+        printf("descr ... \n");
+
 	return descr ;
   error:
 	Py_XDECREF(descr);
@@ -1651,7 +1677,8 @@ static char _mysql_ResultObject_fetch_nparray__doc__[] =
 static PyObject *
 _mysql_ResultObject_fetch_nparray(
 	_mysql_ResultObject *self,
- 	PyObject *unused)
+ 	PyObject* args,
+ 	PyObject* kwargs )
  {
 	unsigned int n, i ;
 	unsigned long *length ;
@@ -1661,13 +1688,18 @@ _mysql_ResultObject_fetch_nparray(
 	PyObject* array = NULL;
 
 	MYSQL_ROW row;
-        npy_intp dims[] = { -1 };
-	
+        npy_intp dims[] = { -1 };	
  	check_result_connection(self);
     
-
         // descr describes the structure of each element, not the shape
-        PyObject* d = _mysql_ResultObject_npdescr( self , NULL ) ;
+        PyObject* d = _mysql_ResultObject_npdescr( self , args, kwargs ) ;
+
+        if( !d ){
+            printf(" null type descr \n" );
+            Py_INCREF(Py_None);
+            return Py_None ;
+        }
+
         PyArray_Descr *descr;
         PyArray_DescrConverter( d , &descr);
         Py_DECREF( d );
@@ -1752,7 +1784,8 @@ static char _mysql_ResultObject_fetch_nparrayfast__doc__[] =
 static PyObject *
 _mysql_ResultObject_fetch_nparrayfast(
 	_mysql_ResultObject *self,
- 	PyObject *unused)
+ 	PyObject *args,
+ 	PyObject *kwargs)
  {
 	unsigned int n, i  ;
         //unsigned long *lengths ;
@@ -1766,7 +1799,7 @@ _mysql_ResultObject_fetch_nparrayfast(
  	check_result_connection(self);
 
         // descr describes the structure of each element, not the shape
-        PyObject* d = _mysql_ResultObject_npdescr( self , NULL ) ;
+        PyObject* d = _mysql_ResultObject_npdescr( self , args , kwargs ) ;
         PyArray_Descr *descr;
         PyArray_DescrConverter( d , &descr);
         Py_DECREF( d );
@@ -2802,7 +2835,7 @@ static PyMethodDef _mysql_ResultObject_methods[] = {
 	{
 		"npdescr",
 		(PyCFunction)_mysql_ResultObject_npdescr,
-		METH_VARARGS,
+		METH_VARARGS | METH_KEYWORDS,
 		_mysql_ResultObject_npdescr__doc__
 	},
 	{
