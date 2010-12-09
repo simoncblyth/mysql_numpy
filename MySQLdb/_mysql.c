@@ -44,9 +44,41 @@ PERFORMANCE OF THIS SOFTWARE.
 #include "mysql_numpy.h"
 
 
+
+void printf_npy( int type_num , char* fmt , void* ptr )
+{
+    switch( type_num ){
+        case NPY_BOOL:       printf( fmt , *((npy_bool*)ptr))           ; break ;
+        case NPY_BYTE:       printf( fmt , *((npy_byte*)ptr))           ; break ;
+        case NPY_UBYTE:      printf( fmt , *((npy_ubyte*)ptr))          ; break ;
+        case NPY_SHORT:      printf( fmt , *((npy_short*)ptr))          ; break ;
+        case NPY_USHORT:     printf( fmt , *((npy_ushort*)ptr))         ; break ;
+        case NPY_INT:        printf( fmt , *((npy_int*)ptr))            ; break ;
+        case NPY_UINT:       printf( fmt , *((npy_uint*)ptr))           ; break ;
+        case NPY_LONG:       printf( fmt , *((npy_long*)ptr))           ; break ;
+        case NPY_ULONG:      printf( fmt , *((npy_ulong*)ptr))          ; break ;
+        case NPY_LONGLONG:   printf( fmt , *((npy_longlong*)ptr))       ; break ;
+        case NPY_ULONGLONG:  printf( fmt , *((npy_ulonglong*)ptr))      ; break ;
+        case NPY_HALF:       printf( fmt , *((npy_half*)ptr))           ; break ;
+        case NPY_FLOAT:      printf( fmt , *((npy_float*)ptr))          ; break ;
+        case NPY_DOUBLE:     printf( fmt , *((npy_double*)ptr))         ; break ;
+        case NPY_LONGDOUBLE: printf( fmt , *((npy_longdouble*)ptr))     ; break ;
+        case NPY_CFLOAT:     printf( fmt , *((npy_cfloat*)ptr))         ; break ;
+        case NPY_CDOUBLE:    printf( fmt , *((npy_cdouble*)ptr))        ; break ;
+        case NPY_CLONGDOUBLE:printf( fmt , *((npy_clongdouble*)ptr))    ; break ;
+        case NPY_DATETIME:   printf( fmt , *((npy_datetime*)ptr))       ; break ;
+        case NPY_TIMEDELTA:  printf( fmt , *((npy_timedelta*)ptr))      ; break ;
+        case NPY_OBJECT:     PyObject_Print( (PyObject*)ptr, stdout, 0) ; break ;
+        case NPY_STRING:     printf( fmt , (char*)ptr  )               ; break ;
+      //case NPY_UNICODE:     sscanf( str,  fmt ,     (npy_unicode*)ptr) ; break ;
+        case NPY_VOID:       printf( "%x" , (npy_intp*)ptr)             ; break ;
+    }
+}
+
+
 int dtype_extract( PyArray_Descr* dtype , int offsets[DTYPE_FIELD_MAX]  , char fmts[DTYPE_FIELD_MAX][DTYPE_FMTLEN_MAX], int types[DTYPE_FIELD_MAX], int* noffsets )
 {
-    // WARNING ... DEVELOPED in ENV-HOME/npy/numpy/dtype.c
+    // initial development in ENV-HOME/npy/numpy/dtype.c
 
      PyObject *key, *tup ;
      PyObject* names = dtype->names ;
@@ -1262,7 +1294,6 @@ _mysql_ResultObject_npdescr(
 	PyObject *kwargs)
 {
 	static char *kwlist[] = {"verbose", "coerce", NULL};
-
         unsigned int verbose = 0 ; 
         PyObject* coerce = NULL ;
 
@@ -1767,17 +1798,15 @@ static char _mysql_ResultObject_fetch_nparrayfast__doc__[] =
   Due to this datetime columns need to be converted to seconds since the epoch.\n\
   For example with SQL : \n\
 \n\
-     select SEQNO, UNIX_TIMESTAMP(TIMESTART) as TIMESTART_ from CalibPmtSpecVld limit 10 \n\
+     select SEQNO, UNIX_TIMESTAMP(TIMESTART) as T from CalibPmtSpecVld limit 10 \n\
 \n\
-  mysql will return the integer number of seconds since the epoch for the TIMESTART_ column \n\
-  which due to the column name matching the special cased list of :\n\
-      TIMESTART_ \n\
-      TIMEEND_ \n\
-      INSERTDATE_ \n\
-      VERSIONDATE_ \n\
-  will be interpreted as a datetime number \n\
+  mysql will return the column 'T' as an integer number of seconds since the epoch \n\
+\n\
+  For numpy to interpret the integer as a datetime the named column needs to be coerced \n\
+  to a datetime64[s] using the coerce dict keyword argument, for example : \n\
+      a = r.fetch_nparrayfast( coerce={'T':'M8[s]' } ) \n\
  \n\
- See also fetch_nparray() which does not have any optimization complications \n\
+ See also fetch_nparray() which does not have these optimization complications \n\
 ";
 
 
@@ -1787,6 +1816,19 @@ _mysql_ResultObject_fetch_nparrayfast(
  	PyObject *args,
  	PyObject *kwargs)
  {
+	static char *kwlist[] = {"verbose", "coerce", NULL};
+        unsigned int verbose = 0 ; 
+        PyObject* coerce = NULL ;
+        if( kwargs ){
+	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iO:nparrayfast", kwlist, &verbose, &coerce )){
+                printf("nparrayfast failed to parse \n");
+		return NULL;
+            }
+        } else {
+            printf("nparrayfast no kwargs using defaults \n");
+        }
+
+
 	unsigned int n, i  ;
         //unsigned long *lengths ;
         int rc ;
@@ -1794,7 +1836,7 @@ _mysql_ResultObject_fetch_nparrayfast(
 	MYSQL_ROW row;
         PyObject* array = NULL  ; 
 
-        //printf("_fetch_nparrayfast\n");
+        if( verbose > 1 ) printf("_fetch_nparrayfast\n");
 	
  	check_result_connection(self);
 
@@ -1840,7 +1882,16 @@ _mysql_ResultObject_fetch_nparrayfast(
 
             for( i = 0 ; i < n ; i++ ){
                  rc = sscanf( row[i],  fmts[i], rec + offsets[i]  ) ;
-                 //if(rc!=1 || i < 10) printf( " i %d offset %d fmt %s type %d rc %d \n", i, offsets[i], fmts[i], types[i], rc  );
+                 if( rc!=1 ){
+                     printf("field %d scan failure \n", i );
+                     goto error ;
+                 }
+                 if( verbose > 1 ){
+                     printf( " i %d  row[i] %s offset %d fmt %s type %d %s rc %d inbuffer ", i, row[i], offsets[i], fmts[i], types[i],NPY_TYPE_NAMES[types[i]],  rc  );
+                     printf_npy( types[i] , fmts[i] , rec + offsets[i] ) ;
+                     printf("\n");
+                 }
+
             }
             rec += descr->elsize ;
         }

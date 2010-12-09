@@ -34,15 +34,12 @@ if __name__ == '__main__':
     conn = _mysql.connect(  read_default_file="~/.my.cnf", read_default_group="client" ) 
 
     #conn.query("select * from CalibPmtSpecVld limit 10")
-    conn.query("select SEQNO, UNIX_TIMESTAMP(TIMESTART) as T from CalibPmtSpecVld limit 10")
-    #conn.query("select SEQNO, TIMESTART, UNIX_TIMESTAMP(TIMESTART), UNIX_TIMESTAMP(TIMESTART) as TIMESTART_ from CalibPmtSpecVld limit 10")
-    #conn.query("select SEQNO, TIMESTART, UNIX_TIMESTAMP(TIMESTART) as T from CalibPmtSpecVld limit 10")
-    #conn.query("select SEQNO, TIMESTART, UNIX_TIMESTAMP(TIMESTART) as T from CalibPmtSpecVld limit 10")
+    conn.query("select SEQNO, TIMESTART, UNIX_TIMESTAMP(TIMESTART) as T, UNIX_TIMESTAMP(TIMESTART) as I from CalibPmtSpecVld limit 10")
 
     r = conn.store_result()
 
 
-    kwargs = dict( verbose=1,  coerce={'T':"M8[s]"} )
+    kwargs = dict( verbose=3,  coerce={'T':"M8[s]", 'I':"q8" } )
 
     d1 = r.npdescr(**kwargs)
     print repr(d1) 
@@ -52,6 +49,7 @@ if __name__ == '__main__':
 
     #a = r.fetch_nparray(**kwargs)
     a = r.fetch_nparrayfast(**kwargs)
+
     print repr(a)
 
 
