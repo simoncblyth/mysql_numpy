@@ -43,13 +43,13 @@ char* NPY_TYPE_FMTS[NPY_NTYPES] =  {
      "%"NPY_ULONGLONG_FMT,
      "%"NPY_HALF_FMT, 
      "%"NPY_FLOAT_FMT, 
-     "%lg",  // "%"NPY_DOUBLE_FMT, 
-     "%Lg", // %"NPY_LONGDOUBLE_FMT,
+     "%lg",  // %"NPY_DOUBLE_FMT (tiz g)
+     "%Lg",  // %"NPY_LONGDOUBLE_FMT (tiz g)
      "NPY_CFLOAT_FMT", 
      "NPY_CDOUBLE", 
      "NPY_CLONGDOUBLE",
-     "%"NPY_DATETIME_FMT, 
-     "%"NPY_TIMEDELTA_FMT,
+     "%lld",  // "%"NPY_DATETIME_FMT,   see env/npy/numpy/datetime_buf.c for rationale  
+     "%lld",  // "%"NPY_TIMEDELTA_FMT,
      "NPY_OBJECT_FMT",
      "NPY_STRING_FMT", 
      "NPY_UNICODE_FMT",

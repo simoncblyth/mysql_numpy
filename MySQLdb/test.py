@@ -30,26 +30,67 @@ SEQNO   TIMESTART       TIMESTART_
 
 """
 
-if __name__ == '__main__':
-    conn = _mysql.connect(  read_default_file="~/.my.cnf", read_default_group="client" ) 
-
-    #conn.query("select * from CalibPmtSpecVld limit 10")
-    conn.query("select SEQNO, TIMESTART, UNIX_TIMESTAMP(TIMESTART) as T, UNIX_TIMESTAMP(TIMESTART) as I from CalibPmtSpecVld limit 10")
-
+def test_npdescr():
+    """
+        Provides the dtype introspected and/or coerced from the mysql result 
+       ... this is used internally by the array fetch methods
+    """ 
+    conn = _mysql.connect( read_default_group="client" ) 
+    conn.query("select * from CalibPmtSpecVld limit 10")
     r = conn.store_result()
+    d = r.npdescr()
+    print repr(d) 
+    conn.close()
+  
+
+def test_fetch_nparray():
+    """
+         When using normal fetching 
+            * no special SQL needed
+            * no coercion either 
+         datetime columns should arrive by normal numpy routes
+    """
+    conn = _mysql.connect( read_default_group="client" ) 
+    conn.query("select * from CalibPmtSpecVld limit 10")
+    r = conn.store_result()
+    a = r.fetch_nparray(verbose=0)
+    print repr(a)
+    conn.close()
+
+def test_fetch_nparrayfast():
+    """
+        When using the fast variant 
+          * use SQL that provides the datetime columns as epoch seconds and name them with a simple identifier eg T, I
+          * coerce said columns at numpy level to be regarded as epoch seconds using dtype code M8[s]
+    """  
+    conn = _mysql.connect( read_default_group="client" ) 
+    conn.query("select SEQNO, UNIX_TIMESTAMP(TIMESTART) as T, UNIX_TIMESTAMP(TIMESTART) as I from CalibPmtSpecVld limit 10")
+    coerce={'T':"M8[s]", 'I':"M8[s]" }
+    r = conn.store_result()
+    a = r.fetch_nparrayfast(verbose=0,coerce=coerce)
+    print repr(a)
+    conn.close()
 
 
-    kwargs = dict( verbose=3,  coerce={'T':"M8[s]", 'I':"q8" } )
+if __name__ == '__main__':
+    pass
+    test_npdescr()
+    test_fetch_nparray()
+    test_fetch_nparrayfast()
+
+
+if 0:
+    conn = _mysql.connect( read_default_group="client" ) 
+    #conn.query("select * from CalibPmtSpecVld limit 10")
+    #conn.query("select * from CalibPmtSpec limit 10")
+    #conn.query("select SEQNO, SITEMASK, SIMMASK, TIMESTART, SUBSITE, UNIX_TIMESTAMP(TIMESTART) as T, TASK, UNIX_TIMESTAMP(TIMESTART) as I, AGGREGATENO from CalibPmtSpecVld limit 3")
+    conn.query("select SEQNO, UNIX_TIMESTAMP(TIMESTART) as T, UNIX_TIMESTAMP(TIMESTART) as I from CalibPmtSpecVld limit 3")
+    r = conn.store_result()
+    kwargs = dict( verbose=3,  coerce={'T':"M8[s]", 'I':"M8[s]" } )
 
     d1 = r.npdescr(**kwargs)
     print repr(d1) 
-
-    d2 = r.npdescr(**kwargs)
-    print repr(d2) 
-
-    #a = r.fetch_nparray(**kwargs)
     a = r.fetch_nparrayfast(**kwargs)
-
     print repr(a)
 
 

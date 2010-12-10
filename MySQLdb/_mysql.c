@@ -40,9 +40,16 @@ PERFORMANCE OF THIS SOFTWARE.
 #include "errmsg.h"
 
 #include <numpy/arrayobject.h>
-
 #include "mysql_numpy.h"
+#include "aligned.h"
+#define NPY_CODE_MAXLEN 64
 
+
+void po( char* msg , PyObject* obj ){
+    printf("%s\n", msg);
+    PyObject_Print( obj , stdout , 0);
+    printf("\n");
+}
 
 
 void printf_npy( int type_num , char* fmt , void* ptr )
@@ -71,7 +78,7 @@ void printf_npy( int type_num , char* fmt , void* ptr )
         case NPY_OBJECT:     PyObject_Print( (PyObject*)ptr, stdout, 0) ; break ;
         case NPY_STRING:     printf( fmt , (char*)ptr  )               ; break ;
       //case NPY_UNICODE:     sscanf( str,  fmt ,     (npy_unicode*)ptr) ; break ;
-        case NPY_VOID:       printf( "%x" , (npy_intp*)ptr)             ; break ;
+        case NPY_VOID:       printf( "%p" , (npy_intp*)ptr)             ; break ;
     }
 }
 
@@ -1293,26 +1300,25 @@ _mysql_ResultObject_npdescr(
 	PyObject *args,
 	PyObject *kwargs)
 {
-	static char *kwlist[] = {"verbose", "coerce", NULL};
+	static char *kwlist[] = {"verbose", "coerce","align", NULL};
         unsigned int verbose = 0 ; 
+        unsigned int align = 0 ; 
         PyObject* coerce = NULL ;
 
         if( kwargs ){
-	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iO:npdescr", kwlist, &verbose, &coerce )){
+	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iOi:npdescr", kwlist, &verbose, &coerce, &align )){
                 printf("failed to parse \n");
 		return NULL;
             }
-        } else {
-            printf("no kwargs using defaults \n");
         }
 
-	PyObject* descr;
+	PyObject* descr ;
 	MYSQL_FIELD *fields;
 
         int tn ;	
         unsigned int i, n;
         long type, length ;
-        char npy_code[30];
+        char npy_code[NPY_CODE_MAXLEN];
         char* name ;
 
 	check_result_connection(self);
@@ -1329,12 +1335,14 @@ _mysql_ResultObject_npdescr(
                 if( coerce != NULL && PyDict_Check( coerce ) && PyDict_Contains( coerce, pname ) ){
                      // user supplied numpy type coercion based on field names
                      PyObject* coco = PyDict_GetItem( coerce , pname ); 
-                     printf("coerce fields named %s with numpy dtype code ... ", name );
-                     PyObject_Print( coco , stdout , 0 ); 
-                     printf("\n");
+                     if( verbose > 0 ){
+                         printf("coerce fields named %s with numpy dtype code ... ", name );
+                         PyObject_Print( coco , stdout , 0 ); 
+                         printf("\n");
+                     }
                      if(PyString_Check( coco )){  
                          char* scoco = PyString_AsString( coco );   
-                         sprintf( npy_code, "%s", scoco );
+                         snprintf( npy_code, NPY_CODE_MAXLEN, "%s", scoco );
                      } else {
                          printf("invalid coerce string  \n");
                          goto error ;
@@ -1346,9 +1354,9 @@ _mysql_ResultObject_npdescr(
                      PyArray_Descr* field_dt = is_flexible  ? PyArray_DescrNewFromType(tn) : PyArray_DescrFromType(tn);
                      if( is_flexible ) field_dt->elsize = length ;
                      if( tn == NPY_DATETIME ){
-                         sprintf( npy_code, "%c%d[s]", field_dt->type , field_dt->elsize );
+                         snprintf( npy_code, NPY_CODE_MAXLEN, "%c%d[s]", field_dt->type , field_dt->elsize );
                      } else {
-                         sprintf( npy_code, "%c%d", field_dt->type , field_dt->elsize );
+                         snprintf( npy_code, NPY_CODE_MAXLEN, "%c%d", field_dt->type , field_dt->elsize );
                      }
                 }
     	        PyObject* it = Py_BuildValue("(s,s)", name, npy_code );
@@ -1359,12 +1367,21 @@ _mysql_ResultObject_npdescr(
 		PyList_SET_ITEM(descr, i, it );
 	}
 
-        printf("descr ... \n");
-        PyObject_Print( descr , stdout , 0);
-        printf("descr ... \n");
+        if( verbose > 2 ) po("descr", descr );
+        
+        PyArray_Descr *dtype ;
+        if ( align > 0 ){
+            printf(" npdescr using PyArray_DescrAlignConverter \n" );
+            PyArray_DescrAlignConverter( descr , &dtype );
+        } else {
+            if(verbose > 0) printf(" npdescr using PyArray_DescrConverter \n" );
+            PyArray_DescrConverter( descr , &dtype );
+        }
 
-	return descr ;
-  error:
+        if( verbose > 2 ) po("dtype", (PyObject*)dtype );
+
+	return (PyObject*)dtype ;
+  error: 
 	Py_XDECREF(descr);
 	return NULL;
 }
@@ -1699,7 +1716,7 @@ static char _mysql_ResultObject_fetch_nparray__doc__[] =
 \n\
   Fetches all rows from the result into a numpy array.\n\
  \n\
- See also fetch_nparrayfast() which is quicker by imposes some complications on the \n\
+ See also fetch_nparrayfast() which is quicker but imposes some complications on the \n\
  way to structure query SQL for proper transmission of datetime columns \n\
 ";
 
@@ -1711,6 +1728,21 @@ _mysql_ResultObject_fetch_nparray(
  	PyObject* args,
  	PyObject* kwargs )
  {
+	static char *kwlist[] = {"verbose", "coerce","align", NULL};
+        unsigned int verbose = 0 ; 
+        unsigned int align = 0 ; 
+        PyObject* coerce = NULL ;
+
+        if( kwargs ){
+	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iOi:fetch_nparray", kwlist, &verbose, &coerce, &align )){
+                printf("fetch_nparray failed to parse \n");
+		return NULL;
+            }
+        } else {
+            printf("fetch_nparray no kwargs using defaults \n");
+        }
+
+
 	unsigned int n, i ;
 	unsigned long *length ;
         my_ulonglong e ;
@@ -1719,32 +1751,22 @@ _mysql_ResultObject_fetch_nparray(
 	PyObject* array = NULL;
 
 	MYSQL_ROW row;
-        npy_intp dims[] = { -1 };	
  	check_result_connection(self);
     
         // descr describes the structure of each element, not the shape
-        PyObject* d = _mysql_ResultObject_npdescr( self , args, kwargs ) ;
-
-        if( !d ){
-            printf(" null type descr \n" );
+        PyArray_Descr* dtype = (PyArray_Descr*)_mysql_ResultObject_npdescr( self , args, kwargs ) ;
+        if( !dtype ){
+            printf(" null dtype descr \n" );
             Py_INCREF(Py_None);
             return Py_None ;
         }
-
-        PyArray_Descr *descr;
-        PyArray_DescrConverter( d , &descr);
-        Py_DECREF( d );
-        //PyObject_Print( d , stdout, 0);
-        //PyObject_Print( descr , stdout, 0);
-
-        //_mysql_ConnectionObject* conn = result_connection(self) ;
-        //unsigned long long nele = mysql_affected_rows(&(conn->connection)) ;
         
         my_ulonglong nele = mysql_num_rows(self->result);
-
-        // hmm need to know the count in order to create the structured array          
-        dims[0] = nele ; 
-        array = PyArray_SimpleNewFromDescr( 1, dims, descr);
+        
+        npy_intp dims[] = { -1 };	
+        dims[0] = (npy_intp)nele ;   // use count  to create the structured array   
+        
+        array = PyArray_SimpleNewFromDescr( 1, dims, dtype );
         
         n = self->nfields ; 
 
@@ -1775,7 +1797,7 @@ _mysql_ResultObject_fetch_nparray(
 		PyTuple_SET_ITEM(r, i, v);
  	    }
             
-            void* ptr = PyArray_GETPTR1(array, (npy_intp)e ) ;
+            void* ptr = PyArray_GETPTR1(array, (npy_intp)e ) ;  
             PyArray_SETITEM(array, ptr, r );
         }
 	return array ;
@@ -1786,8 +1808,28 @@ _mysql_ResultObject_fetch_nparray(
 
 
 
+void array_dump( PyObject* arr ){
 
+   PyArray_Descr* descr =  ((PyArrayObject *)(arr))->descr ;
 
+   npy_intp nbytes = PyArray_NBYTES( (PyObject*)arr ) ;
+   npy_intp size   = PyArray_Size( (PyObject*) arr ) ;
+   printf(" nbytes %d size %d \n", (int)nbytes, (int)size );
+   PyObject_Print( (PyObject*)arr , stdout, 0);
+   printf("\n");
+
+   int i ;
+   for( i = 0 ; i<size ; ++i ){
+       void* ptr = PyArray_GETPTR1(arr, (npy_intp)i ) ;  // simply stride calc macro
+       printf("item %d ptr %p \n", i, ptr );
+       //PyObject* obj = PyArray_GETITEM( arr , ptr );
+       PyObject* obj = descr->f->getitem((char *)(ptr),(PyArrayObject *)(arr)) ;  // what the GETITEM macro does
+
+       PyObject_Print( (PyObject*)obj , stdout, 0);
+       printf("\n");
+   }
+
+}
 
 
 static char _mysql_ResultObject_fetch_nparrayfast__doc__[] =
@@ -1816,11 +1858,13 @@ _mysql_ResultObject_fetch_nparrayfast(
  	PyObject *args,
  	PyObject *kwargs)
  {
-	static char *kwlist[] = {"verbose", "coerce", NULL};
+	static char *kwlist[] = {"verbose", "coerce","align", "malign", NULL};
         unsigned int verbose = 0 ; 
+        unsigned int align = 0 ; 
+        unsigned int malign = 0 ; 
         PyObject* coerce = NULL ;
         if( kwargs ){
-	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iO:nparrayfast", kwlist, &verbose, &coerce )){
+	    if ( !PyArg_ParseTupleAndKeywords(args, kwargs, "|iOii:nparrayfast", kwlist, &verbose, &coerce, &align, &malign )){
                 printf("nparrayfast failed to parse \n");
 		return NULL;
             }
@@ -1832,7 +1876,7 @@ _mysql_ResultObject_fetch_nparrayfast(
 	unsigned int n, i  ;
         //unsigned long *lengths ;
         int rc ;
-        my_ulonglong e ;
+        my_ulonglong nele, e ;
 	MYSQL_ROW row;
         PyObject* array = NULL  ; 
 
@@ -1840,77 +1884,120 @@ _mysql_ResultObject_fetch_nparrayfast(
 	
  	check_result_connection(self);
 
-        // descr describes the structure of each element, not the shape
-        PyObject* d = _mysql_ResultObject_npdescr( self , args , kwargs ) ;
-        PyArray_Descr *descr;
-        PyArray_DescrConverter( d , &descr);
-        Py_DECREF( d );
+        // structure of each element, not the shape
+        PyArray_Descr* dtype = (PyArray_Descr*)_mysql_ResultObject_npdescr( self , args , kwargs ) ;
 
         int types[DTYPE_FIELD_MAX] ;
         int offsets[DTYPE_FIELD_MAX] ;
         char fmts[DTYPE_FIELD_MAX][DTYPE_FMTLEN_MAX] ;
         int numf ;
 
-        dtype_extract( descr, offsets, fmts, types, &numf );
+        dtype_extract( dtype , offsets, fmts, types, &numf );
         
-        //printf("_fetch_nparrayfast descr \n");
-        //PyObject_Print( (PyObject*)descr , stdout , 0 );
-        //printf("_fetch_nparrayfast descr \n");
-
         n = self->nfields ; 
         if( numf != n ){
              printf("_fetch_nparrayfast fields MISMATCH %d  %d \n", n, numf );
              goto error ;
         }
 
-        my_ulonglong nele = mysql_num_rows(self->result);
+        nele = mysql_num_rows(self->result);
         
-        //printf("_fetch_nparrayfast fields %d \n", n  );
-
        // dynamic "struct" creation 
-        size_t size = descr->elsize*nele ;
-        void* data = malloc(size);
+
+        int elsize = dtype->elsize ; 
+        size_t size = elsize*nele ;
+        void* data ; 
+        if ( malign > 0 ){
+             data = _aligned_malloc(size, malign );
+        } else {       
+             data = malloc(size);
+        } 
+
+
         void* rec = data ;
+        if( verbose > 0 ){
+            printf("_fetch_nparrayfast fields %d elsize %d nele %lld size %d \n", n , dtype->elsize, nele, (int)size );
+        } 
  
+
         for( e=0; e<nele ; e++ ){  
 
   	    row = mysql_fetch_row(self->result);
 	    if (!row) goto error;
 
             // hmm not using lengths ... are the row[j] always NULL terminated ?
-	    //lengths = mysql_fetch_lengths(self->result);  
+	    // lengths = mysql_fetch_lengths(self->result);  
 
             for( i = 0 ; i < n ; i++ ){
-                 rc = sscanf( row[i],  fmts[i], rec + offsets[i]  ) ;
-                 if( rc!=1 ){
+                 rc = sscanf( row[i] ,  fmts[i], rec + offsets[i]  ) ;
+                 if( rc != 1 ){
                      printf("field %d scan failure \n", i );
                      goto error ;
                  }
-                 if( verbose > 1 ){
+                 if( verbose > 2 ){
                      printf( " i %d  row[i] %s offset %d fmt %s type %d %s rc %d inbuffer ", i, row[i], offsets[i], fmts[i], types[i],NPY_TYPE_NAMES[types[i]],  rc  );
                      printf_npy( types[i] , fmts[i] , rec + offsets[i] ) ;
                      printf("\n");
                  }
-
             }
-            rec += descr->elsize ;
+            rec += elsize ;
         }
 
 
-        // interpret the buffer and a numpy array 
+        // interpret the buffer as a numpy array 
+        /*
         PyObject* buf = PyBuffer_FromMemory( data , (Py_ssize_t)size ) ;
-        array   = PyArray_FromBuffer( buf, descr , (npy_intp)nele, (npy_intp)0 );
+        array   = PyArray_FromBuffer( buf, dtype , (npy_intp)nele, (npy_intp)0 );
+        */
 
-        //PyObject_Print( (PyObject*)buf , stdout, 0);
-        //printf("\n");
-        //printf(" array %x \n", (npy_intp)array );
-        //PyObject_Print( (PyObject*)array , stdout, 0);
-        //printf("\n");
+        // use registered type approach as know how to "chain" deallocate when use this form
+        // this approach gives Bus error, unless apply the numpy scalarapi ISFLEXIBLE --> ISEXTENDED fix
+ 
+        npy_intp count = (npy_intp)nele ;
+        int typenum = PyArray_RegisterDataType( dtype );
+        array = PyArray_SimpleNewFromData( 1, &count , typenum, data );
+
+        if (array == NULL) {
+             if( malign > 0 ){
+                 _aligned_free(data);
+             } else {
+                 free(data);
+             }
+             Py_XDECREF(array);
+             goto error ;
+        }
+
+        if( malign > 0 ){
+            PyArray_BASE(array) = PyCObject_FromVoidPtr( data , _aligned_free);
+        } else {
+            PyArray_BASE(array) = PyCObject_FromVoidPtr( data , free );
+        }
+
+
+
+
+        if( verbose > 3 ){
+            printf("array_dump data %p ... \n", data );
+            array_dump( array );
+        }
+        if( verbose > 4 ){
+            printf("debug buffer dump post-interp... \n");
+            rec = data ;
+            for( e=0; e<nele ; e++ ){  
+                for( i = 0 ; i < n ; i++ ){
+                    printf(" e %lld i %d ", e, i );
+                    printf_npy( types[i] , fmts[i] , rec + offsets[i] ); 
+                    printf("\n");
+                }
+                rec += elsize ;
+                printf("\n");
+            }
+        }
 
         return array ;
 	    
   error:
-        printf(" error...  \n" );
+        printf(" nparray_fast error...  \n" );
         if (mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
 	      _mysql_Exception((_mysql_ConnectionObject *)self->conn);
         } 
