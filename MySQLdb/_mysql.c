@@ -1350,6 +1350,10 @@ _mysql_ResultObject_npdescr(
                 } else {      
                      // auto typing from translation of mysql type code to numpy 
                      tn =  mysql2npy( type ) ;
+                     if (tn < 0){
+                         printf("failed to convert type %ld  \n", type );
+                         goto error;
+                     }
                      int is_flexible =  PyTypeNum_ISFLEXIBLE(tn);
                      PyArray_Descr* field_dt = is_flexible  ? PyArray_DescrNewFromType(tn) : PyArray_DescrFromType(tn);
                      if( is_flexible ) field_dt->elsize = length ;

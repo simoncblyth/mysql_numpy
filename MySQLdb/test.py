@@ -2,7 +2,11 @@ import _mysql
 """
    ISSUES 
       * SQL queries with 2 columns of the same name yield "Bus Error"
+        * unconfirmed, needs test
+   FIXED ISSUES 
       * array times feature unexpected TZ hour offsets 
+         * fixed by tweak in my github numpy fork , thats now in the official repo 
+      
 
 [blyth@cms01 MySQLdb]$ python test.py
 array([(17, datetime.datetime(2010, 6, 21, 7, 49, 24)),
@@ -49,6 +53,7 @@ def test_fetch_nparray():
             * no special SQL needed
             * no coercion either 
          datetime columns should arrive by normal numpy routes
+
     """
     conn = _mysql.connect( read_default_group="client" ) 
     conn.query("select * from CalibPmtSpecVld limit 10")
@@ -62,6 +67,7 @@ def test_fetch_nparrayfast():
         When using the fast variant 
           * use SQL that provides the datetime columns as epoch seconds and name them with a simple identifier eg T, I
           * coerce said columns at numpy level to be regarded as epoch seconds using dtype code M8[s]
+
     """  
     conn = _mysql.connect( read_default_group="client" ) 
     conn.query("select SEQNO, UNIX_TIMESTAMP(TIMESTART) as T, UNIX_TIMESTAMP(TIMESTART) as I from CalibPmtSpecVld limit 10")
@@ -74,12 +80,12 @@ def test_fetch_nparrayfast():
 
 if __name__ == '__main__':
     pass
-    test_npdescr()
-    test_fetch_nparray()
-    test_fetch_nparrayfast()
+    #test_npdescr()
+    #test_fetch_nparray()
+    #test_fetch_nparrayfast()
 
 
-if 0:
+if 1:
     conn = _mysql.connect( read_default_group="client" ) 
     #conn.query("select * from CalibPmtSpecVld limit 10")
     #conn.query("select * from CalibPmtSpec limit 10")

@@ -95,6 +95,10 @@ def get_config():
         ]
     create_release_file(metadata)
     del metadata['version_info']
+
+    ## switch off optimization 
+    extra_compile_args += ["-O0"] 
+
     ext_options = dict(
         name = "_mysql",
         library_dirs = library_dirs,
@@ -105,6 +109,8 @@ def get_config():
         extra_objects = extra_objects,
         define_macros = define_macros,
         )
+    for k, v in ext_options.items(): 
+        print "ext_options %r : %r " % ( k, v ) 
     return metadata, ext_options
 
 if __name__ == "__main__":

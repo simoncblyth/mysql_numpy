@@ -102,6 +102,19 @@ int mysql2npy( long type ){
           npt = NPY_STRING ; 
           break ; 
 
+#if MYSQL_VERSION_ID >= 50000
+// present in 5.1.50 but not 4.1.22
+       case MYSQL_TYPE_VARCHAR: 
+           npt = NPY_STRING ;
+           break ; 
+       case MYSQL_TYPE_BIT:
+           npt = NPY_SHORT ;
+           break ; 
+       case  MYSQL_TYPE_NEWDECIMAL:
+           npt = NPY_DOUBLE ; 
+           break ; 
+#endif
+
    }
    return npt ;
 }
